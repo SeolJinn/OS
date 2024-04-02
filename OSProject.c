@@ -51,7 +51,7 @@ void traverseDirectory(const char *basePath, int outputFile) {
                  "Last status change: %s"
                  "Last file access: %s"
                  "Last file modification: %s"
-                 "------------------------------------------\n",
+                 "\n",
                  path, fileStat.st_mode, (long)fileStat.st_dev, (long)fileStat.st_ino, (long)fileStat.st_nlink,
                  (long)fileStat.st_uid, (long)fileStat.st_gid, (long)fileStat.st_rdev, (long)fileStat.st_size,
                  ctime(&fileStat.st_ctime), ctime(&fileStat.st_atime), ctime(&fileStat.st_mtime));
@@ -68,7 +68,10 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    int outputFile = open("OutputFile.txt", O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    char snapshotPath[1024];
+    snprintf(snapshotPath, sizeof(snapshotPath), "%s/snapshot.txt", argv[1]);
+
+    int outputFile = open(snapshotPath, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
     if (outputFile < 0) {
         perror("Error opening output file");
         return 1;
