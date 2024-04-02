@@ -6,8 +6,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <pwd.h>
-#include <grp.h>
 #include <time.h>
 
 void traverseDirectory(const char *basePath, int outputFile) {
@@ -38,33 +36,26 @@ void traverseDirectory(const char *basePath, int outputFile) {
             traverseDirectory(path, outputFile);
         }
 
-        struct passwd *pwd = getpwuid(fileStat.st_uid);
-        struct group *grp = getgrgid(fileStat.st_gid);
-        char permissions[11];
-        permissions[0] = (S_ISDIR(fileStat.st_mode)) ? 'd' : '-';
-        permissions[1] = (fileStat.st_mode & S_IRUSR) ? 'r' : '-';
-        permissions[2] = (fileStat.st_mode & S_IWUSR) ? 'w' : '-';
-        permissions[3] = (fileStat.st_mode & S_IXUSR) ? 'x' : '-';
-        permissions[4] = (fileStat.st_mode & S_IRGRP) ? 'r' : '-';
-        permissions[5] = (fileStat.st_mode & S_IWGRP) ? 'w' : '-';
-        permissions[6] = (fileStat.st_mode & S_IXGRP) ? 'x' : '-';
-        permissions[7] = (fileStat.st_mode & S_IROTH) ? 'r' : '-';
-        permissions[8] = (fileStat.st_mode & S_IWOTH) ? 'w' : '-';
-        permissions[9] = (fileStat.st_mode & S_IXOTH) ? 'x' : '-';
-        permissions[10] = '\0';
+        char buffer[4096]; // Increased buffer size to accommodate all fields
 
-        char lastModified[20];
-        strftime(lastModified, sizeof(lastModified), "%Y-%m-%d %H:%M:%S", localtime(&fileStat.st_mtime));
+        snprintf(buffer, sizeof(buffer),
+                 "File: %s\n"
+                 "File type: %d\n"
+                 "Device ID: %ld\n"
+                 "Inode number: %ld\n"
+                 "Number of hard links: %ld\n"
+                 "User ID of owner: %ld\n"
+                 "Group ID of owner: %ld\n"
+                 "Device ID (if special file): %ld\n"
+                 "Total size, in bytes: %ld\n"
+                 "Last status change: %s"
+                 "Last file access: %s"
+                 "Last file modification: %s"
+                 "------------------------------------------\n",
+                 path, fileStat.st_mode, (long)fileStat.st_dev, (long)fileStat.st_ino, (long)fileStat.st_nlink,
+                 (long)fileStat.st_uid, (long)fileStat.st_gid, (long)fileStat.st_rdev, (long)fileStat.st_size,
+                 ctime(&fileStat.st_ctime), ctime(&fileStat.st_atime), ctime(&fileStat.st_mtime));
 
-        char buffer[2048];
-        snprintf(buffer, sizeof(buffer), "File: %s\n"
-                                            "Permissions: %s\n"
-                                            "Owner: %s\n"
-                                            "Group: %s\n"
-                                            "Size: %ld bytes\n"
-                                            "Last Modified: %s\n"
-                                            "------------------------------------------\n",
-                 path, permissions, (pwd != NULL) ? pwd->pw_name : "", (grp != NULL) ? grp->gr_name : "", fileStat.st_size, lastModified);
         write(outputFile, buffer, strlen(buffer));
     }
 
@@ -77,7 +68,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    int outputFile = open("OutputFile", O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    int outputFile = open("OutputFile.txt", O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
     if (outputFile < 0) {
         perror("Error opening output file");
         return 1;
