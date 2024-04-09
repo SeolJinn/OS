@@ -8,6 +8,153 @@
 #include <fcntl.h>
 #include <time.h>
 
+#define MAX_FILES 1024 
+#define BUFFER_SIZE 4096 
+
+struct FileStat {
+    char *path;
+    int fileType;
+    long deviceID;
+    long inodeNumber;
+    long numHardLinks;
+    long ownerUserID;
+    long ownerGroupID;
+    long deviceIDSpecialFile;
+    long totalSize;
+    char *lastStatusChange;
+    char *lastFileAccess;
+    char *lastFileModification;
+};
+
+enum DifferenceType {
+    NO_DIFFERENCE,
+    FILE_ADDED,
+    FILE_DELETED,
+    FILE_RENAMED,
+    FILE_EDITED,
+    FILE_MOVED
+};
+
+struct Difference {
+    enum DifferenceType type;
+    char *path;
+};
+
+void readSnapshotFile(FILE *snapshotFile, struct FileStat *fileStats, int *fileCount) {
+    char line[BUFFER_SIZE];
+
+    while (fgets(line, BUFFER_SIZE, snapshotFile) != NULL) {
+        fileStats[*fileCount].path = strdup(line); 
+        fileStats[*fileCount].fileType = atoi(fgets(line, BUFFER_SIZE, snapshotFile));
+        fileStats[*fileCount].deviceID = atol(fgets(line, BUFFER_SIZE, snapshotFile));
+        fileStats[*fileCount].inodeNumber = atol(fgets(line, BUFFER_SIZE, snapshotFile));
+        fileStats[*fileCount].numHardLinks = atol(fgets(line, BUFFER_SIZE, snapshotFile));
+        fileStats[*fileCount].ownerUserID = atol(fgets(line, BUFFER_SIZE, snapshotFile));
+        fileStats[*fileCount].ownerGroupID = atol(fgets(line, BUFFER_SIZE, snapshotFile));
+        fileStats[*fileCount].deviceIDSpecialFile = atol(fgets(line, BUFFER_SIZE, snapshotFile));
+        fileStats[*fileCount].totalSize = atol(fgets(line, BUFFER_SIZE, snapshotFile));
+        fileStats[*fileCount].lastStatusChange = strdup(fgets(line, BUFFER_SIZE, snapshotFile));
+        fileStats[*fileCount].lastFileAccess = strdup(fgets(line, BUFFER_SIZE, snapshotFile));
+        fileStats[*fileCount].lastFileModification = strdup(fgets(line, BUFFER_SIZE, snapshotFile));
+
+        (*fileCount)++; 
+    }
+}
+
+void findDifferences(struct FileStat *newFileStat, int newFileCount, struct FileStat *existingFileStat, int existingFileCount) {
+    struct Difference differences[MAX_FILES];
+    int differenceCount = 0;
+
+    for (int i = 0; i < newFileCount; i++) {
+        int found = 0;
+        for (int j = 0; j < existingFileCount; j++) {
+            if (strcmp(newFileStat[i].path, existingFileStat[j].path) == 0) {
+                found = 1;
+                break;
+            }
+        }
+
+        if (!found) {
+            differences[differenceCount].type = FILE_ADDED;
+            differences[differenceCount].path = newFileStat[i].path;
+            differenceCount++;
+        }
+    }
+
+    for (int i = 0; i < existingFileCount; i++) {
+        int found = 0;
+        for (int j = 0; j < newFileCount; j++) {
+            if (strcmp(existingFileStat[i].path, newFileStat[j].path) == 0) {
+                found = 1;
+                break;
+            }
+        }
+
+        if (!found) {
+            differences[differenceCount].type = FILE_DELETED;
+            differences[differenceCount].path = existingFileStat[i].path;
+            differenceCount++;
+        }
+    }
+
+    //TODO : Cases for FILE_RENAMED, FILE_EDITED, FILE_MOVED
+
+    for (int i = 0; i < differenceCount; i++) {
+        switch (differences[i].type) {
+            case FILE_ADDED:
+                printf("File added: %s", differences[i].path);
+                break;
+            case FILE_DELETED:
+                printf("File deleted: %s", differences[i].path);
+                break;
+            case FILE_RENAMED:
+                printf("File renamed: %s", differences[i].path);
+                break;
+            case FILE_EDITED:
+                printf("File edited: %s", differences[i].path);
+                break;
+            case FILE_MOVED:
+                printf("File moved: %s", differences[i].path);
+                break;
+            default:
+                break;
+        }
+    }
+
+    if (differenceCount == 0) 
+        printf("No differences found.\n");
+}
+
+void compareSnapshots(const char *basePath, const char *newSnapshotPath, const char *existingSnapshotPath) {
+    FILE *newSnapshotFile = fopen(newSnapshotPath, "r");
+    if (newSnapshotFile == NULL) {
+        perror("Error opening new snapshot file");
+        return;
+    }
+
+    FILE *existingSnapshotFile = fopen(existingSnapshotPath, "r");
+    if (existingSnapshotFile == NULL) {
+        perror("Error opening existing snapshot file");
+        fclose(newSnapshotFile);
+        return;
+    }
+
+    struct FileStat newFileStat[MAX_FILES];
+    struct FileStat existingFileStat[MAX_FILES];
+
+    int newFileCount = 0;
+    int existingFileCount = 0;
+
+    readSnapshotFile(newSnapshotFile, newFileStat, &newFileCount);
+    readSnapshotFile(existingSnapshotFile, existingFileStat, &existingFileCount);
+
+    fclose(newSnapshotFile);
+    fclose(existingSnapshotFile);
+
+    // TODO: Compare the two snapshots and identify changes
+    findDifferences(newFileStat, newFileCount, existingFileStat, existingFileCount);
+}
+
 void traverseDirectory(const char *basePath, int outputFile) {
     DIR *dir = opendir(basePath);
     if (dir == NULL) {
@@ -22,6 +169,12 @@ void traverseDirectory(const char *basePath, int outputFile) {
         char path[1024];
         snprintf(path, sizeof(path), "%s/%s", basePath, entry->d_name);
 
+        // To skip . .. snapshot.txt and snapshot_temp.txt
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 || 
+            strcmp(entry->d_name, "snapshot.txt") == 0 || strcmp(entry->d_name, "snapshot_temp.txt") == 0) {
+            continue;
+        }
+
         if (stat(path, &fileStat) < 0) {
             perror("Error getting file stat");
             closedir(dir);
@@ -29,29 +182,13 @@ void traverseDirectory(const char *basePath, int outputFile) {
         }
 
         if (S_ISDIR(fileStat.st_mode)) {
-            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-                continue;
-            }
-
             traverseDirectory(path, outputFile);
         }
 
-        char buffer[4096]; // Increased buffer size to accommodate all fields
+        char buffer[4096];
 
         snprintf(buffer, sizeof(buffer),
-                 "File: %s\n"
-                 "File type: %d\n"
-                 "Device ID: %ld\n"
-                 "Inode number: %ld\n"
-                 "Number of hard links: %ld\n"
-                 "User ID of owner: %ld\n"
-                 "Group ID of owner: %ld\n"
-                 "Device ID (if special file): %ld\n"
-                 "Total size, in bytes: %ld\n"
-                 "Last status change: %s"
-                 "Last file access: %s"
-                 "Last file modification: %s"
-                 "\n",
+                 "%s\n%d\n%ld\n%ld\n%ld\n%ld\n%ld\n%ld\n%ld\n%s%s%s",
                  path, fileStat.st_mode, (long)fileStat.st_dev, (long)fileStat.st_ino, (long)fileStat.st_nlink,
                  (long)fileStat.st_uid, (long)fileStat.st_gid, (long)fileStat.st_rdev, (long)fileStat.st_size,
                  ctime(&fileStat.st_ctime), ctime(&fileStat.st_atime), ctime(&fileStat.st_mtime));
@@ -62,24 +199,65 @@ void traverseDirectory(const char *basePath, int outputFile) {
     closedir(dir);
 }
 
+int fileExists(const char *filePath) {
+    return access(filePath, F_OK) != -1;
+}
+
+int deleteFile(const char *filePath) {
+    return remove(filePath);
+}
+
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         printf("Usage: %s Directory_Path\n", argv[0]);
         return 1;
     }
 
-    char snapshotPath[1024];
-    snprintf(snapshotPath, sizeof(snapshotPath), "%s/snapshot.txt", argv[1]);
+    char newSnapshotPath[1024];
+    snprintf(newSnapshotPath, sizeof(newSnapshotPath), "%s/snapshot.txt", argv[1]);
+    char existingSnapshotPath[1024];
+    snprintf(existingSnapshotPath, sizeof(existingSnapshotPath), "%s/snapshot.txt", argv[1]);
+    char tempSnapshotPath[1024];
+    snprintf(tempSnapshotPath, sizeof(tempSnapshotPath), "%s/snapshot_temp.txt", argv[1]);
 
-    int outputFile = open(snapshotPath, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
-    if (outputFile < 0) {
-        perror("Error opening output file");
-        return 1;
+    if (fileExists(existingSnapshotPath)) {
+        printf("Existing snapshot found. Comparing with the new snapshot...\n");
+
+        int tempOutputFile = open(tempSnapshotPath, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+        if (tempOutputFile < 0) {
+            perror("Error opening temporary output file");
+            return 1;
+        }
+
+        traverseDirectory(argv[1], tempOutputFile);
+        close(tempOutputFile);
+
+        compareSnapshots(argv[1], tempSnapshotPath, existingSnapshotPath);
+
+        if (deleteFile(existingSnapshotPath) != 0) {
+            perror("Error deleting existing snapshot file");
+            return 1;
+        }
+
+        if (rename(tempSnapshotPath, existingSnapshotPath) != 0) {
+            perror("Error renaming temporary snapshot file");
+            return 1;
+        }
+
+        printf("Snapshot updated successfully.\n");
+    } else {
+        printf("No existing snapshot found. Creating a new snapshot...\n");
+        int outputFile = open(newSnapshotPath, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+        if (outputFile < 0) {
+            perror("Error opening output file");
+            return 1;
+        }
+
+        traverseDirectory(argv[1], outputFile);
+        close(outputFile);
+
+        printf("New snapshot created successfully.\n");
     }
-
-    traverseDirectory(argv[1], outputFile);
-
-    close(outputFile);
 
     return 0;
 }
