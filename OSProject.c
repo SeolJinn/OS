@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <time.h>
+#include <sys/wait.h>
 
 #define MAX_FILES 1024 
 #define BUFFER_SIZE 4096 
@@ -209,54 +210,73 @@ int deleteFile(const char *filePath) {
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
-        printf("Usage: %s Directory_Path\n", argv[0]);
+        printf("Usage: %s Directory_Path1 Directory_Path2 ... Directory_PathN\n", argv[0]);
         return 1;
     }
 
-    char newSnapshotPath[1024];
-    snprintf(newSnapshotPath, sizeof(newSnapshotPath), "%s/snapshot.txt", argv[1]);
-    char existingSnapshotPath[1024];
-    snprintf(existingSnapshotPath, sizeof(existingSnapshotPath), "%s/snapshot.txt", argv[1]);
-    char tempSnapshotPath[1024];
-    snprintf(tempSnapshotPath, sizeof(tempSnapshotPath), "%s/snapshot_temp.txt", argv[1]);
-
-    if (fileExists(existingSnapshotPath)) {
-        printf("Existing snapshot found. Comparing with the new snapshot...\n");
-
-        int tempOutputFile = open(tempSnapshotPath, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
-        if (tempOutputFile < 0) {
-            perror("Error opening temporary output file");
+    for (int i = 1; i < argc; i++) {
+        pid_t pid = fork(); 
+        if (pid == -1) {
+            perror("fork");
             return 1;
+        } else if (pid == 0) { 
+            char snapshotPath[1024];
+            snprintf(snapshotPath, sizeof(snapshotPath), "%s/snapshot.txt", argv[i]);
+            char tempSnapshotPath[1024];
+            snprintf(tempSnapshotPath, sizeof(tempSnapshotPath), "%s/snapshot_temp.txt", argv[i]);
+
+            if (fileExists(snapshotPath)) {
+                printf("Existing snapshot found for directory %s. Comparing with the new snapshot...\n", argv[i]);
+
+                int tempOutputFile = open(tempSnapshotPath, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+                if (tempOutputFile < 0) {
+                    perror("Error opening temporary output file");
+                    return 1;
+                }
+
+                traverseDirectory(argv[i], tempOutputFile);
+                close(tempOutputFile);
+
+                compareSnapshots(argv[i], tempSnapshotPath, snapshotPath);
+
+                if (deleteFile(snapshotPath) != 0) {
+                    perror("Error deleting existing snapshot file");
+                    return 1;
+                }
+
+                if (rename(tempSnapshotPath, snapshotPath) != 0) {
+                    perror("Error renaming temporary snapshot file");
+                    return 1;
+                }
+
+                printf("Snapshot for directory %s updated successfully.\n", argv[i]);
+            } else {
+                printf("No existing snapshot found for directory %s. Creating a new snapshot...\n", argv[i]);
+
+                int outputFile = open(snapshotPath, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+                if (outputFile < 0) {
+                    perror("Error opening output file");
+                    return 1;
+                }
+
+                traverseDirectory(argv[i], outputFile);
+                close(outputFile);
+
+                printf("New snapshot for directory %s created successfully.\n", argv[i]);
+            }
+
+            exit(0); 
         }
+    }
 
-        traverseDirectory(argv[1], tempOutputFile);
-        close(tempOutputFile);
-
-        compareSnapshots(argv[1], tempSnapshotPath, existingSnapshotPath);
-
-        if (deleteFile(existingSnapshotPath) != 0) {
-            perror("Error deleting existing snapshot file");
-            return 1;
+    int status;
+    pid_t wpid;
+    while ((wpid = waitpid(-1, &status, 0)) > 0) {
+        if (WIFEXITED(status)) {
+            printf("Child process with PID %d exited with status %d\n", wpid, WEXITSTATUS(status));
+        } else {
+            printf("Child process with PID %d terminated abnormally\n", wpid);
         }
-
-        if (rename(tempSnapshotPath, existingSnapshotPath) != 0) {
-            perror("Error renaming temporary snapshot file");
-            return 1;
-        }
-
-        printf("Snapshot updated successfully.\n");
-    } else {
-        printf("No existing snapshot found. Creating a new snapshot...\n");
-        int outputFile = open(newSnapshotPath, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
-        if (outputFile < 0) {
-            perror("Error opening output file");
-            return 1;
-        }
-
-        traverseDirectory(argv[1], outputFile);
-        close(outputFile);
-
-        printf("New snapshot created successfully.\n");
     }
 
     return 0;
