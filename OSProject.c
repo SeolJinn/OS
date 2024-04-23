@@ -214,17 +214,19 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    // Iterate over directory paths
     for (int i = 1; i < argc; i++) {
-        pid_t pid = fork(); 
+        pid_t pid = fork(); // Fork a child process
         if (pid == -1) {
             perror("fork");
             return 1;
-        } else if (pid == 0) { 
+        } else if (pid == 0) { // Child process
             char snapshotPath[1024];
             snprintf(snapshotPath, sizeof(snapshotPath), "%s/snapshot.txt", argv[i]);
             char tempSnapshotPath[1024];
             snprintf(tempSnapshotPath, sizeof(tempSnapshotPath), "%s/snapshot_temp.txt", argv[i]);
 
+            // Check if existing snapshot file exists
             if (fileExists(snapshotPath)) {
                 printf("Existing snapshot found for directory %s. Comparing with the new snapshot...\n", argv[i]);
 
@@ -265,10 +267,11 @@ int main(int argc, char *argv[]) {
                 printf("New snapshot for directory %s created successfully.\n", argv[i]);
             }
 
-            exit(0); 
+            exit(0); // Child process exits after snapshot operation
         }
     }
 
+    // Parent process waits for all child processes to finish
     int status;
     pid_t wpid;
     while ((wpid = waitpid(-1, &status, 0)) > 0) {
