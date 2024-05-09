@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <time.h>
 #include <sys/wait.h>
+#include <stdbool.h>
 
 #define MAX_FILES 1024 
 #define BUFFER_SIZE 4096 
@@ -62,44 +63,99 @@ void readSnapshotFile(FILE *snapshotFile, struct FileStat *fileStats, int *fileC
     }
 }
 
+
+bool isSameFile(struct FileStat *file1, struct FileStat *file2) {
+    // Compare all attributes except the path
+    return (file1->fileType == file2->fileType &&
+            file1->deviceID == file2->deviceID &&
+            file1->inodeNumber == file2->inodeNumber &&
+            file1->numHardLinks == file2->numHardLinks &&
+            file1->ownerUserID == file2->ownerUserID &&
+            file1->ownerGroupID == file2->ownerGroupID &&
+            file1->deviceIDSpecialFile == file2->deviceIDSpecialFile &&
+            file1->totalSize == file2->totalSize &&
+            strcmp(file1->lastStatusChange, file2->lastStatusChange) == 0 &&
+            strcmp(file1->lastFileAccess, file2->lastFileAccess) == 0 &&
+            strcmp(file1->lastFileModification, file2->lastFileModification) == 0);
+}
+
 void findDifferences(struct FileStat *newFileStat, int newFileCount, struct FileStat *existingFileStat, int existingFileCount) {
     struct Difference differences[MAX_FILES];
     int differenceCount = 0;
 
+    //Flag to mark existing files as matched. If not matched, it is deleted
+    bool existingMatched[existingFileCount];
+    memset(existingMatched, false, sizeof(existingMatched));
+
+    //Compare each file in the new snapshot with the files in the existing snapshot
     for (int i = 0; i < newFileCount; i++) {
         int found = 0;
         for (int j = 0; j < existingFileCount; j++) {
             if (strcmp(newFileStat[i].path, existingFileStat[j].path) == 0) {
                 found = 1;
+
+                // Check if file attributes other than path have changed
+                if (!isSameFile(&newFileStat[i], &existingFileStat[j])) {
+                    differences[differenceCount].type = FILE_EDITED;
+                    differences[differenceCount].path = newFileStat[i].path;
+                    differenceCount++;
+                }
+
+                // Mark the existing file as matched
+                existingMatched[j] = true;
                 break;
             }
         }
 
+        // If the file is not found in the existing snapshot, it's either added, moved, or renamed
         if (!found) {
-            differences[differenceCount].type = FILE_ADDED;
-            differences[differenceCount].path = newFileStat[i].path;
+            int MoveOrRename = 0;
+            
+            for(int j = 0; j < existingFileCount; j++) 
+            {
+                //Check if inode number exists
+                if(newFileStat[i].inodeNumber == existingFileStat[j].inodeNumber) 
+                {
+                    //Extract filename after last '/'
+                    char *newFileName = strrchr(newFileStat[i].path, '/');
+                    char *existingFileName = strrchr(existingFileStat[j].path, '/');
+                    if(strcmp(newFileName, existingFileName) == 0) 
+                    {
+                        differences[differenceCount].type = FILE_MOVED;
+                        differences[differenceCount].path = newFileStat[i].path;
+                        existingMatched[j] = true;
+                    }
+                    else 
+                    {
+                        differences[differenceCount].type = FILE_RENAMED;
+                        differences[differenceCount].path = newFileStat[i].path;
+                        existingMatched[j] = true;
+                    }
+                    MoveOrRename = 1;
+                    break;
+                }
+            }
+
+            if(MoveOrRename == 0) 
+            {
+                differences[differenceCount].type = FILE_ADDED;
+                differences[differenceCount].path = newFileStat[i].path;
+            }
+
             differenceCount++;
         }
     }
 
+    // Any files remaining in the existing snapshot list are deleted
     for (int i = 0; i < existingFileCount; i++) {
-        int found = 0;
-        for (int j = 0; j < newFileCount; j++) {
-            if (strcmp(existingFileStat[i].path, newFileStat[j].path) == 0) {
-                found = 1;
-                break;
-            }
-        }
-
-        if (!found) {
+        if (!existingMatched[i]) {
             differences[differenceCount].type = FILE_DELETED;
             differences[differenceCount].path = existingFileStat[i].path;
             differenceCount++;
         }
     }
 
-    //TODO : Cases for FILE_RENAMED, FILE_EDITED, FILE_MOVED
-
+    // Print the differences
     for (int i = 0; i < differenceCount; i++) {
         switch (differences[i].type) {
             case FILE_ADDED:
@@ -108,14 +164,14 @@ void findDifferences(struct FileStat *newFileStat, int newFileCount, struct File
             case FILE_DELETED:
                 printf("File deleted: %s", differences[i].path);
                 break;
-            case FILE_RENAMED:
-                printf("File renamed: %s", differences[i].path);
-                break;
             case FILE_EDITED:
                 printf("File edited: %s", differences[i].path);
                 break;
             case FILE_MOVED:
                 printf("File moved: %s", differences[i].path);
+                break;
+            case FILE_RENAMED:
+                printf("File renamed: %s", differences[i].path);
                 break;
             default:
                 break;
@@ -125,6 +181,7 @@ void findDifferences(struct FileStat *newFileStat, int newFileCount, struct File
     if (differenceCount == 0) 
         printf("No differences found.\n");
 }
+
 
 void compareSnapshots(const char *basePath, const char *newSnapshotPath, const char *existingSnapshotPath) {
     FILE *newSnapshotFile = fopen(newSnapshotPath, "r");
@@ -152,7 +209,6 @@ void compareSnapshots(const char *basePath, const char *newSnapshotPath, const c
     fclose(newSnapshotFile);
     fclose(existingSnapshotFile);
 
-    // TODO: Compare the two snapshots and identify changes
     findDifferences(newFileStat, newFileCount, existingFileStat, existingFileCount);
 }
 
