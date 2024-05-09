@@ -227,6 +227,7 @@ void traverseDirectory(const char *basePath, int outputFile) {
         snprintf(path, sizeof(path), "%s/%s", basePath, entry->d_name);
 
         // To skip . .. snapshot.txt and snapshot_temp.txt
+        //TODO MODIFIY snapshot names to skip
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 || 
             strcmp(entry->d_name, "snapshot.txt") == 0 || strcmp(entry->d_name, "snapshot_temp.txt") == 0) {
             continue;
@@ -265,65 +266,84 @@ int deleteFile(const char *filePath) {
 }
 
 int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        printf("Usage: %s Directory_Path1 Directory_Path2 ... Directory_PathN\n", argv[0]);
+    if (argc < 4 || strcmp(argv[1], "-o") != 0) {
+        printf("Usage: %s -o Output_Directory Directory_Path1 Directory_Path2 ... Directory_PathN\n", argv[0]);
         return 1;
     }
 
-    // Iterate over directory paths
-    for (int i = 1; i < argc; i++) {
-        pid_t pid = fork(); // Fork a child process
-        if (pid == -1) {
-            perror("fork");
-            return 1;
-        } else if (pid == 0) { // Child process
-            char snapshotPath[1024];
-            snprintf(snapshotPath, sizeof(snapshotPath), "%s/snapshot.txt", argv[i]);
-            char tempSnapshotPath[1024];
-            snprintf(tempSnapshotPath, sizeof(tempSnapshotPath), "%s/snapshot_temp.txt", argv[i]);
+    // Get the output directory
+    char outputDirectory[256];
+    strcpy(outputDirectory, argv[2]);
+    strcat(outputDirectory, "/");
 
-            // Check if existing snapshot file exists
-            if (fileExists(snapshotPath)) {
+    for(int i = 3; i < argc; i++)
+    {
+        pid_t pid = fork(); //Fork a child process
+        if(pid == -1)
+        {
+            perror("Error forking child process");
+            return 1;
+        }
+        else if(pid == 0)
+        {
+            char SnapshotFileName[256];
+            char SnapshotPath[2048];
+            snprintf(SnapshotFileName, sizeof(SnapshotFileName), "SNAPSHOT_%s.txt", argv[i]);
+            snprintf(SnapshotPath, sizeof(SnapshotPath), "%s%s", outputDirectory, SnapshotFileName);
+
+            char tempSnapshotFileName[256];
+            char tempSnapshotPath[2048];
+            snprintf(tempSnapshotFileName, sizeof(tempSnapshotFileName), "SNAPSHOT_TEMP_%s.txt", argv[i]);
+            snprintf(tempSnapshotPath, sizeof(tempSnapshotPath), "%s%s", outputDirectory, tempSnapshotFileName);
+
+            if(fileExists(SnapshotPath))
+            {
                 printf("Existing snapshot found for directory %s. Comparing with the new snapshot...\n", argv[i]);
 
                 int tempOutputFile = open(tempSnapshotPath, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
-                if (tempOutputFile < 0) {
-                    perror("Error opening temporary output file");
+                if(tempOutputFile < 0)
+                {
+                    perror("Error creating temporary output file");
                     return 1;
                 }
 
                 traverseDirectory(argv[i], tempOutputFile);
                 close(tempOutputFile);
 
-                compareSnapshots(argv[i], tempSnapshotPath, snapshotPath);
+                compareSnapshots(argv[i], tempSnapshotPath, SnapshotPath);
 
-                if (deleteFile(snapshotPath) != 0) {
+                if(deleteFile(SnapshotPath) != 0)
+                {
                     perror("Error deleting existing snapshot file");
                     return 1;
                 }
 
-                if (rename(tempSnapshotPath, snapshotPath) != 0) {
+                if(rename(tempSnapshotPath, SnapshotPath) != 0)
+                {
                     perror("Error renaming temporary snapshot file");
                     return 1;
                 }
 
                 printf("Snapshot for directory %s updated successfully.\n", argv[i]);
-            } else {
+            }
+            else
+            {
                 printf("No existing snapshot found for directory %s. Creating a new snapshot...\n", argv[i]);
 
-                int outputFile = open(snapshotPath, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
-                if (outputFile < 0) {
-                    perror("Error opening output file");
+                int outputFile = open(SnapshotPath, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+                if(outputFile < 0)
+                {
+                    perror("Error creating output file");
                     return 1;
                 }
 
                 traverseDirectory(argv[i], outputFile);
                 close(outputFile);
 
-                printf("New snapshot for directory %s created successfully.\n", argv[i]);
+                printf("Snapshot for directory %s created successfully.\n", argv[i]);   
             }
 
-            exit(0); // Child process exits after snapshot operation
+            exit(0);
         }
     }
 
