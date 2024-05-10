@@ -226,10 +226,15 @@ void traverseDirectory(const char *basePath, int outputFile) {
         char path[1024];
         snprintf(path, sizeof(path), "%s/%s", basePath, entry->d_name);
 
-        // To skip . .. snapshot.txt and snapshot_temp.txt
-        //TODO MODIFIY snapshot names to skip
+        // To skip . .. as well as the snapshot files
+        char basePathCopy[1024];
+        strcpy(basePathCopy, basePath);
+        char SnapshotName[1024];
+        snprintf(SnapshotName, sizeof(SnapshotName), "SNAPSHOT_%s.txt", strtok(basePathCopy, "/"));
+        char tempSnapshotName[1024];
+        snprintf(tempSnapshotName, sizeof(tempSnapshotName), "SNAPSHOT_TEMP_%s.txt", strtok(basePathCopy, "/"));
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 || 
-            strcmp(entry->d_name, "snapshot.txt") == 0 || strcmp(entry->d_name, "snapshot_temp.txt") == 0) {
+            strcmp(entry->d_name, SnapshotName) == 0 || strcmp(entry->d_name, tempSnapshotName) == 0) {
             continue;
         }
 
@@ -266,17 +271,20 @@ int deleteFile(const char *filePath) {
 }
 
 int main(int argc, char *argv[]) {
-    if (argc < 4 || strcmp(argv[1], "-o") != 0) {
-        printf("Usage: %s -o Output_Directory Directory_Path1 Directory_Path2 ... Directory_PathN\n", argv[0]);
+    if (argc < 6 || strcmp(argv[1], "-o") != 0 || strcmp(argv[3], "-s") != 0) {
+        printf("Usage: %s -o Output_Directory -s Isolated_Space Directory_Path1 Directory_Path2 ... Directory_PathN\n", argv[0]);
         return 1;
     }
 
     // Get the output directory
     char outputDirectory[256];
+    char isolatedSpace[256];
     strcpy(outputDirectory, argv[2]);
     strcat(outputDirectory, "/");
+    strcpy(isolatedSpace, argv[4]);
+    strcat(isolatedSpace, "/");
 
-    for(int i = 3; i < argc; i++)
+    for(int i = 5; i < argc; i++)
     {
         pid_t pid = fork(); //Fork a child process
         if(pid == -1)
