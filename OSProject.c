@@ -9,6 +9,8 @@
 #include <time.h>
 #include <sys/wait.h>
 #include <stdbool.h>
+#include <ctype.h>
+#include <libgen.h>
 
 #define MAX_FILES 1024 
 #define BUFFER_SIZE 4096 
@@ -212,7 +214,7 @@ void compareSnapshots(const char *basePath, const char *newSnapshotPath, const c
     findDifferences(newFileStat, newFileCount, existingFileStat, existingFileCount);
 }
 
-void traverseDirectory(const char *basePath, int outputFile) {
+void traverseDirectory(const char *basePath, int outputFile, int pipeWrite) {
     DIR *dir = opendir(basePath);
     if (dir == NULL) {
         perror("Error opening directory");
@@ -233,7 +235,7 @@ void traverseDirectory(const char *basePath, int outputFile) {
         snprintf(SnapshotName, sizeof(SnapshotName), "SNAPSHOT_%s.txt", strtok(basePathCopy, "/"));
         char tempSnapshotName[1024];
         snprintf(tempSnapshotName, sizeof(tempSnapshotName), "SNAPSHOT_TEMP_%s.txt", strtok(basePathCopy, "/"));
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 || 
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 ||
             strcmp(entry->d_name, SnapshotName) == 0 || strcmp(entry->d_name, tempSnapshotName) == 0) {
             continue;
         }
@@ -245,18 +247,84 @@ void traverseDirectory(const char *basePath, int outputFile) {
         }
 
         if (S_ISDIR(fileStat.st_mode)) {
-            traverseDirectory(path, outputFile);
+            traverseDirectory(path, outputFile, pipeWrite);
+        } else {
+            // Write file information to output file
+            char buffer[4096];
+            snprintf(buffer, sizeof(buffer),
+                     "%s\n%d\n%ld\n%ld\n%ld\n%ld\n%ld\n%ld\n%ld\n%s%s%s",
+                     path, fileStat.st_mode, (long)fileStat.st_dev, (long)fileStat.st_ino, (long)fileStat.st_nlink,
+                     (long)fileStat.st_uid, (long)fileStat.st_gid, (long)fileStat.st_rdev, (long)fileStat.st_size,
+                     ctime(&fileStat.st_ctime), ctime(&fileStat.st_atime), ctime(&fileStat.st_mtime));
+
+            write(outputFile, buffer, strlen(buffer));
+            
+            // Fork a child process to check each file
+            pid_t pid = fork();
+            if (pid == -1) {
+                perror("Error forking child process");
+                return;
+            } else if (pid == 0) { // Child process
+                close(outputFile);
+
+                // Check for missing permissions
+                if ((fileStat.st_mode & S_IRWXU) == 0 && (fileStat.st_mode & S_IRWXG) == 0 && (fileStat.st_mode & S_IRWXO) == 0) {
+                    write(pipeWrite, path, strlen(path) + 1);
+                    close(pipeWrite);
+                    exit(0);
+                }
+
+                // Perform file syntactic analysis
+                FILE *file = fopen(path, "r");
+                if (file == NULL) {
+                    perror("Error opening file");
+                    exit(1);
+                }
+
+                char line[BUFFER_SIZE];
+                int lineCount = 0;
+                int wordCount = 0;
+                int charCount = 0;
+                bool containsKeyword = false;
+                bool containsNonASCII = false;
+
+                while (fgets(line, BUFFER_SIZE, file) != NULL) {
+                    lineCount++;
+                    charCount += strlen(line);
+                    char *token = strtok(line, " \t\n");
+                    while (token != NULL) {
+                        wordCount++;
+                        token = strtok(NULL, " \t\n");
+                    }
+
+                    // Check for dangerous keywords
+                    if (strstr(line, "corrupted") != NULL || strstr(line, "dangerous") != NULL ||
+                        strstr(line, "risk") != NULL || strstr(line, "attack") != NULL ||
+                        strstr(line, "malware") != NULL || strstr(line, "malicious") != NULL) {
+                        containsKeyword = true;
+                    }
+
+                    // Check for non-ASCII characters
+                    for (int i = 0; i < strlen(line); i++) {
+                        if (!isascii(line[i])) {
+                            containsNonASCII = true;
+                            break;
+                        }
+                    }
+                }
+
+                fclose(file);
+
+                if (containsKeyword || containsNonASCII) {
+                    write(pipeWrite, path, strlen(path) + 1);
+                } else {
+                    write(pipeWrite, "SAFE", strlen("SAFE") + 1);
+                }
+
+                close(pipeWrite);
+                exit(0);
+            }
         }
-
-        char buffer[4096];
-
-        snprintf(buffer, sizeof(buffer),
-                 "%s\n%d\n%ld\n%ld\n%ld\n%ld\n%ld\n%ld\n%ld\n%s%s%s",
-                 path, fileStat.st_mode, (long)fileStat.st_dev, (long)fileStat.st_ino, (long)fileStat.st_nlink,
-                 (long)fileStat.st_uid, (long)fileStat.st_gid, (long)fileStat.st_rdev, (long)fileStat.st_size,
-                 ctime(&fileStat.st_ctime), ctime(&fileStat.st_atime), ctime(&fileStat.st_mtime));
-
-        write(outputFile, buffer, strlen(buffer));
     }
 
     closedir(dir);
@@ -276,7 +344,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Get the output directory
+    // Get the output directory and isolated space directory
     char outputDirectory[256];
     char isolatedSpace[256];
     strcpy(outputDirectory, argv[2]);
@@ -315,7 +383,7 @@ int main(int argc, char *argv[]) {
                     return 1;
                 }
 
-                traverseDirectory(argv[i], tempOutputFile);
+                traverseDirectory(argv[i], tempOutputFile, -1);
                 close(tempOutputFile);
 
                 compareSnapshots(argv[i], tempSnapshotPath, SnapshotPath);
@@ -345,10 +413,57 @@ int main(int argc, char *argv[]) {
                     return 1;
                 }
 
-                traverseDirectory(argv[i], outputFile);
+                traverseDirectory(argv[i], outputFile, -1);
                 close(outputFile);
 
                 printf("Snapshot for directory %s created successfully.\n", argv[i]);   
+            }
+
+            // Check files for malicious content
+            int pipeFD[2];
+            if (pipe(pipeFD) == -1) {
+                perror("Pipe creation failed");
+                return 1;
+            }
+
+            pid_t checkPid = fork();
+            if (checkPid == -1) {
+                perror("Error forking child process");
+                return 1;
+            } else if (checkPid == 0) { // Child process 
+                close(pipeFD[0]); // Close the read end of the pipe
+                traverseDirectory(argv[i], -1, pipeFD[1]); // Do not write to any output file
+                
+                close(pipeFD[1]); // Close the write end of the pipe
+                exit(0);
+            } else { // Parent process
+                close(pipeFD[1]); // Close the write end of the pipe
+                char result[256];
+                    ssize_t bytesRead;
+
+                int maliciousFileCount = 0;
+                while ((bytesRead = read(pipeFD[0], result, sizeof(result))) > 0) {
+                    if(strcmp(result, "SAFE") != 0)
+                    {
+                        maliciousFileCount++;
+                        
+                        //Move to isolated space
+                        char newFilePath[256];
+                        snprintf(newFilePath, sizeof(newFilePath), "%s%s", isolatedSpace, basename(result));
+                        if(rename(result, newFilePath) != 0)
+                        {
+                            perror("Error moving file to isolated space");
+                            return 1;
+                        }
+                    }
+                }
+                close(pipeFD[0]); // Close the read end of the pipe
+
+                if (maliciousFileCount > 0) {
+                    printf("Child process with PID %d found %d file(s) with malicious content\n", getpid(), maliciousFileCount);
+                } else {
+                    printf("Child process with PID %d found no files with malicious content\n", getpid());
+                }
             }
 
             exit(0);
