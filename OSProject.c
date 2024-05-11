@@ -259,6 +259,11 @@ void traverseDirectory(const char *basePath, int outputFile, int pipeWrite) {
 
             write(outputFile, buffer, strlen(buffer));
             
+            if(pipeWrite == -1) // Do not check for malicious content when just traversing to update snapshot
+            {
+                continue;
+            }
+
             // Fork a child process to check each file
             pid_t pid = fork();
             if (pid == -1) {
@@ -267,62 +272,32 @@ void traverseDirectory(const char *basePath, int outputFile, int pipeWrite) {
             } else if (pid == 0) { // Child process
                 close(outputFile);
 
-                // Check for missing permissions
-                if ((fileStat.st_mode & S_IRWXU) == 0 && (fileStat.st_mode & S_IRWXG) == 0 && (fileStat.st_mode & S_IRWXO) == 0) {
-                    write(pipeWrite, path, strlen(path) + 1);
+                pid_t verify_pid = fork();
+                if (verify_pid == -1) {
+                    perror("Error forking verify process");
+                    return;
+                } else if (verify_pid == 0) { // Child process for verification
                     close(pipeWrite);
-                    exit(0);
-                }
 
-                // Perform file syntactic analysis
-                FILE *file = fopen(path, "r");
-                if (file == NULL) {
-                    perror("Error opening file");
+                    // Execute verify_for_malicious.sh script to check for malicious content
+                    execl("./verify_for_malicious.sh", "verify_for_malicious.sh", path, NULL);
+                    perror("Error executing verify_for_malicious.sh");
                     exit(1);
-                }
-
-                char line[BUFFER_SIZE];
-                int lineCount = 0;
-                int wordCount = 0;
-                int charCount = 0;
-                bool containsKeyword = false;
-                bool containsNonASCII = false;
-
-                while (fgets(line, BUFFER_SIZE, file) != NULL) {
-                    lineCount++;
-                    charCount += strlen(line);
-                    char *token = strtok(line, " \t\n");
-                    while (token != NULL) {
-                        wordCount++;
-                        token = strtok(NULL, " \t\n");
-                    }
-
-                    // Check for dangerous keywords
-                    if (strstr(line, "corrupted") != NULL || strstr(line, "dangerous") != NULL ||
-                        strstr(line, "risk") != NULL || strstr(line, "attack") != NULL ||
-                        strstr(line, "malware") != NULL || strstr(line, "malicious") != NULL) {
-                        containsKeyword = true;
-                    }
-
-                    // Check for non-ASCII characters
-                    for (int i = 0; i < strlen(line); i++) {
-                        if (!isascii(line[i])) {
-                            containsNonASCII = true;
-                            break;
+                } else { // Parent process
+                    int status;
+                    waitpid(verify_pid, &status, 0);
+                    if (WIFEXITED(status)) {
+                        if (WEXITSTATUS(status) == 0) { // Script returned zero -> file is safe
+                            write(pipeWrite, "SAFE", strlen("SAFE") + 1);
+                        } else { // Script returned non-zero -> file is malicious
+                            write(pipeWrite, path, strlen(path) + 1);
                         }
+                    } else {
+                        perror("Script execution failed");
                     }
+                    close(pipeWrite);
                 }
-
-                fclose(file);
-
-                if (containsKeyword || containsNonASCII) {
-                    write(pipeWrite, path, strlen(path) + 1);
-                } else {
-                    write(pipeWrite, "SAFE", strlen("SAFE") + 1);
-                }
-
-                close(pipeWrite);
-                exit(0);
+                exit(0); // Exit this process after forking the verification process
             }
         }
     }
@@ -336,6 +311,18 @@ int fileExists(const char *filePath) {
 
 int deleteFile(const char *filePath) {
     return remove(filePath);
+}
+
+// Function to create directory if it doesn't exist
+void createDirectory(const char *path) {
+    struct stat st;
+    if (stat(path, &st) == -1) {
+        if (mkdir(path, 0700) == -1) {
+            perror("Error creating directory");
+            exit(EXIT_FAILURE);
+        }
+        printf("Directory created: %s\n", path);
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -352,6 +339,10 @@ int main(int argc, char *argv[]) {
     strcpy(isolatedSpace, argv[4]);
     strcat(isolatedSpace, "/");
 
+    // Create the output directory and isolated space directory if they don't exist
+    createDirectory(outputDirectory);
+    createDirectory(isolatedSpace);
+    
     for(int i = 5; i < argc; i++)
     {
         pid_t pid = fork(); //Fork a child process
