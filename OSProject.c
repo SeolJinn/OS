@@ -430,7 +430,7 @@ int main(int argc, char *argv[]) {
             } else { // Parent process
                 close(pipeFD[1]); // Close the write end of the pipe
                 char result[256];
-                    ssize_t bytesRead;
+                ssize_t bytesRead;
 
                 int maliciousFileCount = 0;
                 while ((bytesRead = read(pipeFD[0], result, sizeof(result))) > 0) {
